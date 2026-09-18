@@ -3,7 +3,9 @@
 > Turn a `.md` file into a print-ready A4 PDF in your browser — zero install, one file, fully offline.
 > 把 `.md` 变成可直接打印的 A4 文档：自动分页、自动目录页码、页眉卷名、页脚页码。
 
-**下载 `md-print-pdf.html`，双击打开，把 `.md` 拖进去，点「导出 PDF」。** 不需要装 Node / Python / LaTeX，不需要联网，文件不上传。
+**在线版（即开即用）：** <https://lidegaoseng.github.io/md-a4-print/>
+
+**离线版：** 下载 `md-print-pdf.html`，双击打开，把 `.md` 拖进去，点「导出 PDF」。不需要装 Node / Python / LaTeX，不需要联网，文件不上传。
 
 ---
 

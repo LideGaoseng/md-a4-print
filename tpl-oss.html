@@ -1,0 +1,1228 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Markdown 打印版 PDF</title>
+<style>
+/* ============ 基础 ============ */
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+html { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+body {
+  font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif;
+  background: #e9ecef;
+  color: #1f2933;
+}
+button { font-family: inherit; }
+
+/* ============ 顶栏 ============ */
+#bar {
+  position: sticky; top: 0; z-index: 20;
+  display: none; align-items: center; gap: 12px;
+  padding: 10px 18px;
+  background: rgba(255,255,255,.94);
+  border-bottom: 1px solid #dde3ea;
+}
+#bar .name { font-weight: 600; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 34%; }
+#bar .spacer { flex: 1; }
+#bar .tip { color: #64748b; font-size: 13px; }
+#bar .warn { color: #8a5408; background: #fdf0dc; border: 1px solid #f0dcbb; border-radius: 6px; padding: 4px 10px; font-size: 13px; max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.btn {
+  border: 0; border-radius: 9px; cursor: pointer; font-size: 15px;
+  padding: 9px 18px; transition: background .15s;
+}
+.btn-main { background: #0f766e; color: #fff; font-weight: 600; }
+.btn-main:hover { background: #115e59; }
+.btn-ghost { background: #e2e8f0; color: #1f2933; }
+.btn-ghost:hover { background: #cbd5e1; }
+
+/* ============ 选择页 ============ */
+#picker { max-width: 680px; margin: 0 auto; padding: 10vh 24px 60px; text-align: center; }
+#picker h1 { font-size: 30px; margin: 0 0 10px; letter-spacing: 1px; color: #102a43; }
+#picker .sub { color: #52606d; font-size: 16px; margin: 0 0 34px; line-height: 1.8; }
+#drop {
+  background: #fff; border: 2px dashed #b6c2cf; border-radius: 18px;
+  padding: 52px 28px; transition: border-color .15s, background .15s;
+}
+#drop.hover { border-color: #0f766e; background: #f0fdfa; }
+#drop .or { color: #7b8794; font-size: 14px; margin: 16px 0 0; }
+#picker .note { margin-top: 22px; color: #7b8794; font-size: 13px; line-height: 1.9; }
+#picker .note .must { color: #b03000; font-size: 13.5px; }
+
+/* ============ 文档版式（分页引擎：每页一张 210×297mm 的"纸"） ============
+   正文：仿宋 12pt（小四），行距 19pt，首行缩进 2 字
+   页边距：上 26 / 下 16 / 左 25 / 右 15 毫米（版心 170 × 255mm ≈ 40 字/行）
+           —— 左侧 25mm 为装订/长尾夹预留（夹子夹住纸边不压正文）
+   页眉（双校徽+卷名+分隔线）、页脚（页码）为页内元素
+   v19（2026-09-18）：① 校徽放大（14 / 12mm）② 左边距 15→25mm ③ 喷墨适配
+       喷墨只做"防断线 / 防糊"：线条加深、彩色细字加深、小字加深放大。
+       打印按页计费、不计墨量，故不做任何省墨取舍 —— 反白胶囊、浅底纹等保留原观感。
+   v20（2026-09-18）：省纸。分页门限放开（段落可拆字数 80→24、标题孤行 90→68px、
+       页尾余量 10→6px）+ 间距 1pt 级微调（段间距 3→2pt、标题上下各收 2~3pt、下边距 18→16mm）。
+       实测省 5~6% 页数，内容零丢失。**行距 19pt、正文 12pt、左 25mm、右 15mm 永不压缩。** */
+#wrap { display: none; }
+#busy { display: none; position: fixed; left: 0; right: 0; top: 0; bottom: 0; background: rgba(255,255,255,.75); z-index: 300; align-items: center; justify-content: center; font: 15px "Microsoft YaHei", "PingFang SC", sans-serif; color: #33404d; letter-spacing: 1px; }
+
+/* ============ 分页引擎生成物：每页一张"纸" ============ */
+#pages { display: none; padding: 26px 0 70px; }
+.page {
+  position: relative;
+  width: 210mm;
+  height: 297mm;
+  background: #fff;
+  margin: 0 auto 26px;
+  border-radius: 6px;
+  box-shadow: 0 4px 28px rgba(31,41,51,.12);
+  overflow: hidden;
+}
+.pg-header {
+  position: absolute;
+  top: 5mm; left: 25mm; right: 15mm;
+  height: 18mm;
+  border-bottom: .5mm solid #b3c7c4;   /* 喷墨：浅色细线会因墨滴扩散发虚，加深加粗一档 */
+}
+/* 校徽外沿距纸顶 7mm（喷墨机不可打印区比激光更大，且进纸偏移更多） */
+.pg-crest { position: absolute; left: 0; top: 2mm; width: 14mm; height: 14mm; }
+.pg-crest2 { position: absolute; left: 16mm; top: 3mm; width: 12mm; height: 12mm; }
+.pg-title {
+  position: absolute; left: 0; right: 0; top: 0; height: 18mm;
+  display: flex; align-items: center; justify-content: center;
+  font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+  font-size: 10pt; color: #46525c; letter-spacing: .4px;
+}
+.pg-footer {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;             /* 页码相对整张纸居中，不随装订边偏移 */
+  height: 16mm;
+  display: flex; align-items: center; justify-content: center;
+  font-family: "Times New Roman", "Microsoft YaHei", "PingFang SC", sans-serif;
+  font-size: 10pt; color: #1f1f1f; letter-spacing: .4px;
+}
+.pg-body {
+  position: absolute;
+  top: 26mm; left: 25mm; right: 15mm; bottom: 16mm;
+  /* 行尾悬挂标点允许画出盒外 3mm 再裁（不支持 overflow-clip-margin 时退回 hidden） */
+  overflow: hidden;
+  overflow: clip;
+  overflow-clip-margin: 3mm;
+  font-family: "Times New Roman", "FangSong_GB2312", "仿宋_GB2312", "FangSong", "仿宋", "STFangsong", serif;
+  font-size: 12pt;
+  line-height: 19pt;
+  letter-spacing: .15px;
+  color: #000;
+  print-color-adjust: exact;
+  -webkit-print-color-adjust: exact;
+}
+.pg-body > *:first-child { margin-top: 0; }
+.pg-body h1, .pg-body h2, .pg-body h3, .pg-body h4, .pg-body h5, .pg-body h6 { color: #000; }
+.pg-body h1 {
+  font-family: "Times New Roman", "方正小标宋简体", "FZXiaoBiaoSong-B05S", "STZhongsong", "SimSun", "宋体", serif;
+  font-weight: 700;
+  font-size: 15pt;
+  text-align: center;
+  text-indent: 0;
+  line-height: 1.5;
+  letter-spacing: .5px;
+  margin: 9pt 0 6pt 0;
+}
+.pg-body h1.h1-sec { color: #0e6a61; }
+.pg-body h1.h1-sec::before { content: "\2014\2002"; color: #a9b7c4; font-weight: 400; }
+.pg-body h1.h1-sec::after { content: "\2002\2014"; color: #a9b7c4; font-weight: 400; }
+.pg-body h1.h1-doc {
+  font-size: 18pt;
+  letter-spacing: 1px;
+  margin: 2pt 0 10pt 0;
+  padding-bottom: 8pt;
+  border-bottom: 2.5px solid #0f766e;
+}
+.pg-body h2 {
+  font-family: "SimHei", "黑体", "Heiti SC", sans-serif;
+  font-size: 13.5pt; font-weight: 400;
+  text-indent: 0; line-height: 20pt;
+  margin: 8pt 0 3pt 0;
+  padding: 1.5pt 8pt;
+  border-left: 8px solid #0f766e;
+  background: #f3f8f7;
+}
+.pg-body h3 {
+  font-family: "KaiTi", "KaiTi_GB2312", "楷体", "楷体_GB2312", "STKaiti", serif;
+  font-size: 13pt; font-weight: 400;
+  color: #0d4d51;   /* 楷体笔画细，喷墨下浅彩色字最易糊，加深一档 */
+  text-indent: 2em; line-height: 19pt;
+  margin: 6pt 0 2pt 0;
+}
+.pg-body h4, .pg-body h5, .pg-body h6 {
+  font-family: inherit;
+  font-size: 12pt; font-weight: 700;
+  text-indent: 2em; line-height: 19pt;
+  margin: 6pt 0 2pt 0;
+}
+.pg-body p { margin: 0 0 2pt 0; text-indent: 2em; text-align: justify; overflow-wrap: break-word; }
+.pg-body ul, .pg-body ol { margin: 0; padding-left: 2.4em; }
+.pg-body li { margin: 0 0 2pt 0; text-indent: 0; overflow-wrap: break-word; }
+.pg-body li::marker { color: #0f766e; }
+.pg-body li.split-cont { list-style: none; }
+.pg-body li p { text-indent: 0; }
+.pg-body li > ul, .pg-body li > ol { margin: 0; }
+.pg-body a { color: #1a5fb4; text-decoration: underline; }
+/* 答案标记：深绿底反白字。打印不计墨量，保留反白（观感更强、答案更跳）
+   喷墨下白字能否清晰取决于打印机，必要时把底色加深即可提高反差 */
+.pg-body .ans {
+  background: #0f766e; border: 1px solid #0f766e; border-radius: 4px;
+  padding: 0 5px; font-weight: 700; white-space: nowrap; color: #ffffff;
+}
+/* 教辅双色：重点词=青，警示/考点提示词=橙红 */
+.pg-body strong, .pg-body b { color: #0c5f55; }
+.pg-body strong.warn, .pg-body b.warn { color: #d9480f; }
+.pg-body .tag {
+  border-radius: 4px; padding: 0 5px; margin-right: 3px;
+  font-weight: 700; font-size: 11pt; letter-spacing: .3px; white-space: nowrap;
+}
+.pg-body .tag-def { background: #d9ece7; color: #0c6a5f; }
+.pg-body .tag-exam { background: #fae7ca; color: #98590c; }
+.pg-body .yr {
+  background: #fcf3e3; border-radius: 3px; padding: 0 3px;
+  color: #8f5710; font-weight: 600; white-space: nowrap;
+}
+.pg-body .sym-ok { color: #15804a; font-weight: 700; }
+.pg-body .sym-no { color: #c0392b; font-weight: 700; }
+.pg-body .sym-warn { color: #b06a00; font-weight: 700; }
+
+/* 手写目录（若文档自带）：被自动目录替换后隐藏 */
+.pg-body .hand-toc { display: none; }
+
+/* 文本块跨页切分：前段末行两端对齐、后段取消首行缩进 */
+.pg-body .cut-mid { text-align-last: justify; }
+.pg-body .cut-cont { text-indent: 0; }
+
+/* ============ 自动目录（条目页码由分页引擎回填） ============ */
+.pg-body .toc {
+  margin: 8pt 0 10pt;
+  padding: 6pt 10pt;
+  background: #f7fafa;
+  border: 1px solid #cfe0dd;
+  border-radius: 4px;
+}
+.pg-body .toc-hd {
+  font-family: "SimHei", "黑体", sans-serif;
+  font-size: 12pt;
+  text-align: center;
+  letter-spacing: 6px;
+  color: #0f766e;
+  margin: 0 0 3pt 0;
+}
+.pg-body .toc-entry {
+  display: flex;
+  align-items: baseline;
+  color: #000;
+  text-decoration: none;
+  font-size: 11.5pt;
+  line-height: 1.7;
+}
+.pg-body .toc-entry .t { flex: 0 1 auto; }
+.pg-body .toc-entry .dots {
+  flex: 1 1 auto;
+  min-width: 20px;
+  margin: 0 6px;
+  border-bottom: 1px dotted #9fb0bd;
+  position: relative;
+  top: -0.28em;
+}
+.pg-body .toc-entry .toc-num {
+  font-family: "Times New Roman", "SimSun", serif;
+  color: #0f766e;
+  font-weight: 700;
+  min-width: 2.2em;
+  text-align: right;
+}
+.pg-body code {
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 10pt; background: #f5f5f5; border: 1px solid #c9c9c9;
+  border-radius: 3px; padding: 0 4px;
+}
+.pg-body pre {
+  background: #f7f7f7; border: 1px solid #c9c9c9; border-radius: 4px;
+  padding: 8pt 10pt; overflow: auto; line-height: 1.55;
+}
+.pg-body pre code { background: none; border: 0; padding: 0; font-size: 9.5pt; white-space: pre-wrap; word-break: break-all; }
+.pg-body blockquote {
+  margin: 4pt 0; padding: 2.5pt 10pt;
+  border-left: 3px solid #6ba49c; background: #f7fafb; color: #3d454c;
+}
+.pg-body blockquote p { text-indent: 0; }
+.pg-body table { border-collapse: collapse; margin: 5pt 0; width: 100%; line-height: 1.45; }
+.pg-body th, .pg-body td { border: .75pt solid #93a9b7; padding: 2.5pt 5pt; font-size: 11pt; }
+.pg-body th { background: #e9f3f1; font-family: "SimHei", "黑体", sans-serif; font-weight: 400; border-color: #7f97a6; white-space: nowrap; }
+.pg-body img { max-width: 100%; display: block; margin: .6em auto; }
+/* 水平线：颜色加深防喷墨发虚；上下间距 10pt→7pt（文档里共有 500+ 条） */
+.pg-body hr { border: 0; border-top: 1px solid #aebcc6; margin: 7pt 0; }
+.pg-body del, .pg-body s, .pg-body strike { color: inherit; text-decoration: none; } /* 划掉的字：去划线、当普通文字显示 */
+.pg-body input[type="checkbox"] { transform: scale(1.1); margin-right: 6px; }
+
+/* ============ 打印 ============ */
+@page { size: A4; margin: 0; }
+@media print {
+  body { background: #fff; }
+  #bar, #picker { display: none !important; }
+  #wrap { display: block !important; }
+  #pages { display: block !important; padding: 0; }
+  .page {
+    margin: 0; border-radius: 0; box-shadow: none;
+    break-after: page;
+    page-break-after: always;
+  }
+  .page:last-child { break-after: auto; page-break-after: auto; }
+}
+</style>
+</head>
+<body>
+
+<!-- 选择页 -->
+<section id="picker">
+  <h1>Markdown 打印版 PDF</h1>
+  <p class="sub">把 .md 文件拖进来，或点下面的按钮选文件<br>输出为可直接打印的 A4 版式（仿宋小四 · 页眉卷名 + 页码）<br>左侧预留 25mm 装订/夹子边，适合喷墨彩印</p>
+  <div id="drop">
+    <button type="button" class="btn btn-main" id="btnPick">选择 .md 文件</button>
+    <p class="or">也可以把文件直接从文件夹拖到这块区域</p>
+  </div>
+  <p class="note"><b class="must">导出前必做：在打印窗口展开「更多设置」，勾选「背景图形」。</b>不勾选的话，表格边框、标题底纹、答案标记的底色会全部消失，版式会垮掉。<br>文件只在本机读取，不会上传到网上。点右上角「导出 PDF」，在窗口里把「目标」选成「另存为 PDF」即可保存。<br>喷墨彩印建议：纸张选 80g 以上（普通 70g 会起皱），打印质量选「高质量 / 最佳」而非「标准」。<br>
+    <span style="color:#9aa5b1">v1.0 · A4 · 仿宋 12pt · 版心 170mm · 左 25mm 装订边</span></p>
+  <input id="file" type="file" accept=".md,.markdown,.mdown,.txt,text/markdown" hidden>
+</section>
+
+<!-- 顶栏 -->
+<div id="bar">
+  <span class="name" id="fname"></span>
+  <span class="spacer"></span>
+  <span class="warn" id="chk" style="display:none"></span>
+  <span class="tip">导出窗口里：目标选「另存为 PDF」（自动带页眉卷名和页码）</span>
+  <button type="button" class="btn btn-ghost" id="btnNew">换一篇</button>
+  <button type="button" class="btn btn-main" id="btnPdf">导出 PDF</button>
+</div>
+
+<!-- 排版遮罩（处理中提示） -->
+<div id="busy">正在排版，请稍候…</div>
+
+<!-- 正文（#doc 为处理源，分页完成后隐藏；#pages 为分页成品） -->
+<div id="wrap"><article id="doc"></article><div id="pages"></div></div>
+
+<script>
+/* marked 渲染组件 v15.0.12（开源许可 MIT，项目主页 github.com/markedjs/marked）
+   已内嵌在本文件里，不依赖网络 */
+/*__MARKED_SRC__*/
+</script>
+
+<script>
+var doc = document.getElementById('doc');
+var picker = document.getElementById('picker');
+var bar = document.getElementById('bar');
+var wrap = document.getElementById('wrap');
+var fname = document.getElementById('fname');
+var fileInput = document.getElementById('file');
+var baseName = 'document';
+/* 开源版默认不带徽章。想加自己的校徽/徽章：用 tools\build.py 注入，
+   或直接把下面两行的空字符串换成 data:image/png;base64,<你的PNG> */
+var CREST_SRC = '';
+var CREST2_SRC = '';
+var pageTitle = '';
+
+function sanitize(html) {
+  var d = new DOMParser().parseFromString(html, 'text/html');
+  d.querySelectorAll('script,iframe,object,embed,link,meta,form').forEach(function (el) { el.remove(); });
+  d.querySelectorAll('*').forEach(function (el) {
+    Array.prototype.slice.call(el.attributes).forEach(function (a) {
+      if (/^on/i.test(a.name) || /javascript\s*:/i.test(a.value)) { el.removeAttribute(a.name); }
+    });
+  });
+  d.querySelectorAll('a[href]').forEach(function (a) { a.target = '_blank'; a.rel = 'noopener'; });
+  return d.body.innerHTML;
+}
+
+function decorateAnswers(root) {
+  var re = /(?:正确|参考|标准)?答案[：:]\s*(?:[0-9]+\s*[-–—]\s*)?[A-EＡ-Ｅ]{1,5}(?:\s*[、，,]\s*(?:[0-9]+\s*[-–—]\s*)?[A-EＡ-Ｅ]{1,5})*/g;
+  var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode: function (n) {
+      if (!n.nodeValue || n.nodeValue.indexOf('答案') < 0) { return NodeFilter.FILTER_REJECT; }
+      var p = n.parentNode;
+      while (p && p !== root) {
+        var tn = p.nodeName.toLowerCase();
+        if (tn === 'pre' || tn === 'code') { return NodeFilter.FILTER_REJECT; }
+        p = p.parentNode;
+      }
+      return NodeFilter.FILTER_ACCEPT;
+    }
+  });
+  var nodes = [], n;
+  while ((n = walker.nextNode())) { nodes.push(n); }
+  nodes.forEach(function (node) {
+    var text = node.nodeValue, m, last = 0, frag = null;
+    re.lastIndex = 0;
+    while ((m = re.exec(text))) {
+      if (!frag) { frag = document.createDocumentFragment(); }
+      if (m.index > last) { frag.appendChild(document.createTextNode(text.slice(last, m.index))); }
+      var span = document.createElement('span');
+      span.className = 'ans';
+      span.textContent = m[0];
+      frag.appendChild(span);
+      last = m.index + m[0].length;
+    }
+    if (frag) {
+      if (last < text.length) { frag.appendChild(document.createTextNode(text.slice(last))); }
+      node.parentNode.replaceChild(frag, node);
+    }
+  });
+  // 加粗写法支持：**正确答案**：**B. …** / **答案**：C / **答案：C** 整块等
+  var sts = root.querySelectorAll('strong, b');
+  Array.prototype.forEach.call(sts, function (st) {
+    if (st.classList.contains('ans') || st.querySelector('*')) { return; }
+    var txt = st.textContent;
+    if (/^\s*(?:正确|参考|标准|唯一)?答案\s*[：:]\s*[A-EＡ-Ｅ]{1,5}\s*$/.test(txt) ||
+        /^\s*(?:正确|参考|标准|唯一)?答案\s*[：:]\s*$/.test(txt)) {
+      st.classList.add('ans');
+      return;
+    }
+    if (/^\s*(?:正确|参考|标准|唯一)?答案\s*$/.test(txt)) {
+      var nxt = st.nextSibling;
+      if (nxt && nxt.nodeType === 3 && /^\s*[：:]/.test(nxt.nodeValue)) {
+        var mm = nxt.nodeValue.match(/^\s*[：:]/);
+        nxt.nodeValue = nxt.nodeValue.slice(mm[0].length);
+        st.appendChild(document.createTextNode('\uFF1A'));
+        st.classList.add('ans');
+      }
+    }
+  });
+}
+
+function buildTOC(root) {
+  var h1s = [], h2s = [];
+  for (var i = 0; i < root.children.length; i++) {
+    var tn = root.children[i].tagName;
+    if (tn === 'H1') { h1s.push(root.children[i]); }
+    else if (tn === 'H2') { h2s.push(root.children[i]); }
+  }
+  var numRe = /^\s*(?:[\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341\u767e]+\s*[\u3001.\uFF0E]|\u7b2c\s*[\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341\u767e\d]+\s*[\u7ae0\u8bb2\u8282\u90e8]|[\uFF08(]\s*[\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341\d]+\s*[\uFF09)]|\d+\s*[.\u3001\uFF0E])/;
+  var handToc = null;
+  var scanLimit = Math.min(root.children.length, 20);
+  for (var ci = 0; ci < scanLimit; ci++) {
+    var cel = root.children[ci];
+    if (/^H[1-6]$/.test(cel.tagName) && /^\s*(目\s*录|contents?)\s*$/i.test(cel.textContent)) { handToc = cel; break; }
+  }
+  var list = null, skipFirst = false, anchor = null;
+  if (h1s.length >= 3) {
+    list = h1s;
+    var pos0 = Array.prototype.indexOf.call(root.children, h1s[0]);
+    skipFirst = (pos0 <= 1) && !numRe.test(h1s[0].textContent);
+    anchor = h1s[0];
+  } else if (h2s.length >= 5) {
+    list = h2s;
+    anchor = h1s.length ? h1s[0] : null;
+  }
+  if (!list) { return; }
+  if (list.length - (skipFirst ? 1 : 0) < 2) { return; }
+  var nav = document.createElement('nav');
+  nav.className = 'toc';
+  var hd = document.createElement('div');
+  hd.className = 'toc-hd';
+  hd.textContent = '\u76EE \u5F55';
+  nav.appendChild(hd);
+  for (var j = skipFirst ? 1 : 0; j < list.length; j++) {
+    var h = list[j];
+    var id = 'sec-' + j;
+    h.id = id;
+    var a = document.createElement('a');
+    a.className = 'toc-entry';
+    a.setAttribute('href', '#' + id);
+    var t = document.createElement('span');
+    t.className = 't';
+    t.textContent = h.textContent;
+    var dd = document.createElement('span');
+    dd.className = 'dots';
+    var num = document.createElement('span');
+    num.className = 'toc-num';
+    a.appendChild(t);
+    a.appendChild(dd);
+    a.appendChild(num);
+    nav.appendChild(a);
+  }
+  if (handToc) {
+    var hideList = [handToc];
+    var sib = handToc.nextElementSibling;
+    while (sib && /^(OL|UL)$/.test(sib.tagName)) { hideList.push(sib); sib = sib.nextElementSibling; }
+    hideList.forEach(function (h) { h.classList.add('hand-toc'); });
+    handToc.parentNode.insertBefore(nav, handToc);
+  } else if (anchor) {
+    anchor.parentNode.insertBefore(nav, anchor.nextSibling);
+  } else {
+    root.insertBefore(nav, root.firstChild);
+  }
+}
+
+function fixStrays(root) {
+  var count = 0;
+  var re = /\*\*([^*\n]{1,150}?)\*\*/g;
+  var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode: function (n) {
+      if (!n.nodeValue || n.nodeValue.indexOf('**') < 0) { return NodeFilter.FILTER_REJECT; }
+      var p = n.parentNode;
+      while (p && p !== root) {
+        var tn = p.nodeName.toLowerCase();
+        if (tn === 'pre' || tn === 'code') { return NodeFilter.FILTER_REJECT; }
+        p = p.parentNode;
+      }
+      return NodeFilter.FILTER_ACCEPT;
+    }
+  });
+  var nodes = [], n;
+  while ((n = walker.nextNode())) { nodes.push(n); }
+  nodes.forEach(function (node) {
+    var text = node.nodeValue, m, last = 0, frag = null;
+    re.lastIndex = 0;
+    while ((m = re.exec(text))) {
+      count++;
+      if (!frag) { frag = document.createDocumentFragment(); }
+      if (m.index > last) {
+        var gap = text.slice(last, m.index);
+        count += (gap.match(/\*\*/g) || []).length;
+        frag.appendChild(document.createTextNode(gap.split('**').join('')));
+      }
+      var st = document.createElement('strong');
+      st.textContent = m[1];
+      frag.appendChild(st);
+      last = m.index + m[0].length;
+    }
+    if (frag) {
+      if (last < text.length) {
+        var tail = text.slice(last);
+        count += (tail.match(/\*\*/g) || []).length;
+        frag.appendChild(document.createTextNode(tail.split('**').join('')));
+      }
+      node.parentNode.replaceChild(frag, node);
+    }
+  });
+  return count;
+}
+
+function decorateTags(root) {
+  var map = { '是什么': 'tag-def', '为什么': 'tag-def', '记忆法': 'tag-def', '怎么考': 'tag-exam', '举一反三': 'tag-exam' };
+  var reHead = /^([\s\u2002\u2003\u00a0]*)(是什么|为什么|记忆法|怎么考|举一反三)[：:]/;
+  function makeTag(word) {
+    var s = document.createElement('span');
+    s.className = 'tag ' + map[word];
+    s.textContent = word + '\uFF1A';
+    return s;
+  }
+  var els = root.querySelectorAll('p, li');
+  Array.prototype.forEach.call(els, function (el) {
+    var first = el.firstChild;
+    while (first && first.nodeType === 3 && !first.nodeValue.trim()) { first = first.nextSibling; }
+    if (!first) { return; }
+    if (first.nodeType === 1 && first.nodeName === 'STRONG') {
+      var txt = first.textContent.trim().replace(/[：:]\s*$/, '');
+      if (!map[txt]) { return; }
+      var next = first.nextSibling;
+      var colonNext = false;
+      if (next && next.nodeType === 3) { if (/^[\s\u2002\u2003\u00a0]*[：:]/.test(next.nodeValue)) { colonNext = true; } }
+      var colonInline = /[：:]\s*$/.test(first.textContent);
+      if (!colonNext && !colonInline) { return; }
+      el.replaceChild(makeTag(txt), first);
+      if (colonNext) { next.nodeValue = next.nodeValue.replace(/^([\s\u2002\u2003\u00a0]*)[：:]/, '$1'); }
+    } else if (first.nodeType === 3) {
+      var m = first.nodeValue.match(reHead);
+      if (!m) { return; }
+      var frag = document.createDocumentFragment();
+      if (m[1]) { frag.appendChild(document.createTextNode(m[1])); }
+      frag.appendChild(makeTag(m[2]));
+      var rest = first.nodeValue.slice(m[0].length);
+      if (rest) { frag.appendChild(document.createTextNode(rest)); }
+      el.replaceChild(frag, first);
+    }
+  });
+}
+
+function decorateYears(root) {
+  var rx1 = /(?:19|20)\d{2}(?:\s*\/\s*(?:19|20)\d{2})?\s*卷(?:\s*(?:名解|名词解释|单选|多选|选择|填空|简答|论述|判断))?(?:\s*\d+(?:\s*\/\s*\d+)*)?/g;
+  var rx2 = /(?<=[=\uFF1D])\s*(?:19|20)\d{2}\s*(?:名解|简答|单选|多选|填空|论述|选择|名|简|单|多|填|论|选)\s*\d+(?:\s*\/\s*\d+)*/g;
+  var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode: function (n) {
+      if (!n.nodeValue || !/\d{4}/.test(n.nodeValue)) { return NodeFilter.FILTER_REJECT; }
+      var p = n.parentNode;
+      while (p && p !== root) {
+        var tn = p.nodeName.toLowerCase();
+        if (tn === 'pre' || tn === 'code') { return NodeFilter.FILTER_REJECT; }
+        p = p.parentNode;
+      }
+      return NodeFilter.FILTER_ACCEPT;
+    }
+  });
+  var nodes = [], n;
+  while ((n = walker.nextNode())) { nodes.push(n); }
+  nodes.forEach(function (node) {
+    var text = node.nodeValue;
+    var spans = [];
+    [rx1, rx2].forEach(function (rx) {
+      var m;
+      rx.lastIndex = 0;
+      while ((m = rx.exec(text))) {
+        if (!m[0].length) { rx.lastIndex++; continue; }
+        var lead = (m[0].match(/^\s*/) || [''])[0].length;
+        spans.push([m.index + lead, m.index + m[0].length]);
+      }
+    });
+    if (!spans.length) { return; }
+    spans.sort(function (a, b) { return a[0] - b[0]; });
+    var merged = [];
+    spans.forEach(function (s) {
+      var lm = merged[merged.length - 1];
+      if (lm && s[0] <= lm[1]) { if (s[1] > lm[1]) { lm[1] = s[1]; } }
+      else { merged.push([s[0], s[1]]); }
+    });
+    var frag = document.createDocumentFragment(), last = 0;
+    merged.forEach(function (s) {
+      if (s[0] > last) { frag.appendChild(document.createTextNode(text.slice(last, s[0]))); }
+      var sp = document.createElement('span');
+      sp.className = 'yr';
+      sp.textContent = text.slice(s[0], s[1]);
+      frag.appendChild(sp);
+      last = s[1];
+    });
+    if (last < text.length) { frag.appendChild(document.createTextNode(text.slice(last))); }
+    node.parentNode.replaceChild(frag, node);
+  });
+}
+
+function decorateWarnWords(root) {
+  var WARN = ['易错','易错点','易错细节','警示','警告','注意','误区','坑','坑点','大坑','陷阱','必背','必考','必记','高频','超高频','易混','易混点','易漏','易漏点','慎记','谨记','小心','提醒','避坑','考点定位','考点延伸','考点清单','易忽略','易忽略点'];
+  var set = {};
+  WARN.forEach(function (w) { set[w] = 1; });
+  var sts = root.querySelectorAll('strong, b');
+  Array.prototype.forEach.call(sts, function (st) {
+    if (st.querySelector('*') || st.classList.contains('ans') || st.classList.contains('warn')) { return; }
+    var t = st.textContent.replace(/[\s\u3000]+/g, '').replace(/[：:，,。.、！!？?）)】」』]+$/g, '').trim();
+    if (set[t]) { st.classList.add('warn'); }
+  });
+}
+
+function decorateSymbols(root) {
+  var rules = [
+    { ch: '\u26A0\uFE0F', cls: 'sym-warn', out: '\u26A0' },
+    { ch: '\u26A0', cls: 'sym-warn', out: '\u26A0' },
+    { ch: '\u2705', cls: 'sym-ok', out: '\u2713' },
+    { ch: '\u274C', cls: 'sym-no', out: '\u2717' }
+  ];
+  var re = new RegExp(rules.map(function (r) { return r.ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }).join('|'), 'g');
+  var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode: function (n) {
+      if (!n.nodeValue) { return NodeFilter.FILTER_REJECT; }
+      if (n.nodeValue.indexOf('\u2705') < 0 && n.nodeValue.indexOf('\u274C') < 0 && n.nodeValue.indexOf('\u26A0') < 0) { return NodeFilter.FILTER_REJECT; }
+      var p = n.parentNode;
+      while (p && p !== root) {
+        var tn = p.nodeName.toLowerCase();
+        if (tn === 'pre' || tn === 'code') { return NodeFilter.FILTER_REJECT; }
+        p = p.parentNode;
+      }
+      return NodeFilter.FILTER_ACCEPT;
+    }
+  });
+  var nodes = [], n;
+  while ((n = walker.nextNode())) { nodes.push(n); }
+  nodes.forEach(function (node) {
+    var text = node.nodeValue;
+    var frag = document.createDocumentFragment();
+    var last = 0, m, hit = false;
+    re.lastIndex = 0;
+    while ((m = re.exec(text))) {
+      hit = true;
+      if (m.index > last) { frag.appendChild(document.createTextNode(text.slice(last, m.index))); }
+      var rule = null;
+      for (var i = 0; i < rules.length; i++) { if (rules[i].ch === m[0]) { rule = rules[i]; break; } }
+      if (!rule) { rule = { cls: 'sym-warn', out: m[0] }; }
+      var sp = document.createElement('span');
+      sp.className = rule.cls;
+      sp.textContent = rule.out;
+      frag.appendChild(sp);
+      last = m.index + m[0].length;
+    }
+    if (!hit) { return; }
+    if (last < text.length) { frag.appendChild(document.createTextNode(text.slice(last))); }
+    node.parentNode.replaceChild(frag, node);
+  });
+}
+
+function stripFrontMatter(text) {
+  if (!/^---[ \t]*\r?\n/.test(text)) { return text; }
+  var m = text.match(/^---[ \t]*\r?\n([\s\S]{0,4000}?)\r?\n---[ \t]*(?:\r?\n|$)/);
+  if (!m) { return text; }
+  if (!/^\s*[^\r\n:：]{1,80}[：:]/m.test(m[1])) { return text; }
+  return text.slice(m[0].length);
+}
+
+function stripStrikeMarks(text) {
+  return text.replace(/[\u0334-\u0338\u20D2\u20E5\u20E6\u20E7\u20E8\u0489\uFE26\u0333]/g, '');
+}
+
+function normalizeTildesText(text) {
+  // marked 会把单个波浪号误判为删除线（官方 issue #1561 / #3746）
+  // 处理：范围号波浪全部转全角 ～（中文规范写法），真正的 ~~ 删除线保留
+  var t = text.split('~~').join('\uE000\uE000');
+  t = t.split('~').join('\uFF5E');
+  return t.split('\uE000\uE000').join('~~');
+}
+
+function normalizeQuotes(root) {
+  var map = '\u201C$1\u201D';
+  var re = /"([^"\r\n\u201C\u201D]{1,120})"/g;
+  var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode: function (n) {
+      if (!n.nodeValue || n.nodeValue.indexOf('"') < 0) { return NodeFilter.FILTER_REJECT; }
+      var p = n.parentNode;
+      while (p && p !== root) {
+        var tn = p.nodeName.toLowerCase();
+        if (tn === 'pre' || tn === 'code') { return NodeFilter.FILTER_REJECT; }
+        p = p.parentNode;
+      }
+      return NodeFilter.FILTER_ACCEPT;
+    }
+  });
+  var nodes = [], n;
+  while ((n = walker.nextNode())) { nodes.push(n); }
+  nodes.forEach(function (node) {
+    var text = node.nodeValue;
+    var out = text.replace(re, map);
+    if (out !== text) { node.nodeValue = out; }
+  });
+}
+
+function normalizeTildes(root) {
+  var re = /([\u4e00-\u9fa5\d%])\s*~\s*([\u4e00-\u9fa5\d])/g;
+  var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode: function (n) {
+      if (!n.nodeValue || n.nodeValue.indexOf('~') < 0) { return NodeFilter.FILTER_REJECT; }
+      var p = n.parentNode;
+      while (p && p !== root) {
+        var tn = p.nodeName.toLowerCase();
+        if (tn === 'pre' || tn === 'code') { return NodeFilter.FILTER_REJECT; }
+        p = p.parentNode;
+      }
+      return NodeFilter.FILTER_ACCEPT;
+    }
+  });
+  var nodes = [], n;
+  while ((n = walker.nextNode())) { nodes.push(n); }
+  nodes.forEach(function (node) {
+    var out = node.nodeValue.replace(re, '$1\uFF5E$2');
+    if (out !== node.nodeValue) { node.nodeValue = out; }
+  });
+}
+
+function collectIssues(opts, fixed, overflow) {
+  var chk = document.getElementById('chk');
+  if (!chk) { return; }
+  var parts = [];
+  var failed = 0;
+  var box = document.getElementById('pages');
+  Array.prototype.forEach.call(box ? box.querySelectorAll('img') : [], function (im) {
+    if (im.className === 'pg-crest' || im.className === 'pg-crest2') { return; }
+    if (!im.complete || im.naturalWidth === 0) { failed++; }
+  });
+  if (failed > 0) { parts.push('有 ' + failed + ' 张图片没能显示'); }
+  if (opts && opts.reencoded) { parts.push('文件编码特殊，已用兼容方式读取'); }
+  if (fixed && fixed > 0) { parts.push('修好了 ' + fixed + ' 处加粗格式'); }
+  if (overflow && overflow > 0) { parts.push('有 ' + overflow + ' 页内容过长，可能显示不全'); }
+  if (parts.length) {
+    chk.textContent = '注意：' + parts.join('；');
+    chk.style.display = '';
+  } else {
+    chk.style.display = 'none';
+  }
+}
+
+/* ================= 分页引擎 =================
+   把 #doc 里的内容按 210×297mm 的"页"重新编排：
+   - 每个块先试装当前页；装不下就先拆（列表拆项、表格拆行、文本块按字符二分切分）
+   - 标题不落在页尾（避免孤行）；每页首块顶格
+   - 分页后回填目录页码与「第 X 页 / 共 Y 页」；页眉（校徽+卷名+分隔线）、页脚为页内元素
+   v1 已知限制：单块超页且无法拆分的（如超长引用块）会溢出一页，由 collectIssues 报警 */
+
+var PAGE_H_PX = (297 - 26 - 16) * 96 / 25.4;   /* 上 26 / 下 16；实际以 DOM 实测高度为准 */
+
+function isDocTitleH1(h1, root) {
+  var numRe = /^\s*(?:[\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341\u767e]+\s*[\u3001.\uFF0E]|\u7b2c\s*[\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341\u767e\d]+\s*[\u7ae0\u8bb2\u8282\u90e8]|[\uFF08(]\s*[\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341\d]+\s*[\uFF09)]|\d+\s*[.\u3001\uFF0E])/;
+  var pos0 = Array.prototype.indexOf.call(root.children, h1);
+  return (pos0 <= 1) && !numRe.test(h1.textContent);
+}
+
+function markHeadings(root) {
+  var h1s = [];
+  for (var i = 0; i < root.children.length; i++) {
+    if (root.children[i].tagName === 'H1') { h1s.push(root.children[i]); }
+  }
+  h1s.forEach(function (h, i) {
+    h.classList.add((i === 0 && isDocTitleH1(h, root)) ? 'h1-doc' : 'h1-sec');
+  });
+}
+
+/* 多列表格自适应：列数越多，字号越小、表头允许换行。
+   起因：th 默认 nowrap，10 列以上的表格表头会把列撑宽、挤扁正文列。
+   只碰列数 >= 7 的表格，窄表格不受影响。 */
+function fitWideTables(root) {
+  var n = 0;
+  Array.prototype.forEach.call(root.querySelectorAll('table'), function (tb) {
+    var rows = tb.rows, maxCols = 0, i;
+    for (i = 0; i < rows.length; i++) {
+      if (rows[i].cells.length > maxCols) { maxCols = rows[i].cells.length; }
+    }
+    var fs = '';
+    if (maxCols >= 11) { fs = '9pt'; }
+    else if (maxCols >= 8) { fs = '10pt'; }
+    else if (maxCols >= 7) { fs = '10.5pt'; }
+    if (!fs) { return; }
+    tb.style.fontSize = fs;
+    Array.prototype.forEach.call(tb.querySelectorAll('th, td'), function (c) {
+      c.style.fontSize = fs;                       /* th/td 自身设了 11pt，必须逐个覆盖 */
+    });
+    if (maxCols >= 7) {
+      Array.prototype.forEach.call(tb.querySelectorAll('th'), function (c) {
+        c.style.whiteSpace = 'normal';             /* 放开表头换行，避免撑宽列 */
+      });
+    }
+    n++;
+  });
+  return n;
+}
+
+function buildPageShell() {
+  var page = document.createElement('div');
+  page.className = 'page';
+  var header = document.createElement('div');
+  header.className = 'pg-header';
+  var title = document.createElement('span');
+  title.className = 'pg-title';
+  title.textContent = pageTitle;
+  if (CREST_SRC) {                    /* 未配置徽章时页眉只留卷名与分隔线 */
+    var crest = document.createElement('img');
+    crest.className = 'pg-crest';
+    crest.alt = '';
+    crest.src = CREST_SRC;
+    header.appendChild(crest);
+  }
+  if (CREST2_SRC) {
+    var crest2 = document.createElement('img');
+    crest2.className = 'pg-crest2';
+    crest2.alt = '';
+    crest2.src = CREST2_SRC;
+    header.appendChild(crest2);
+  }
+  header.appendChild(title);
+  var body = document.createElement('div');
+  body.className = 'pg-body';
+  var footer = document.createElement('div');
+  footer.className = 'pg-footer';
+  page.appendChild(header);
+  page.appendChild(body);
+  page.appendChild(footer);
+  return { page: page, body: body, footer: footer };
+}
+
+function waitImages(cb) {
+  var imgs = Array.prototype.slice.call(doc.querySelectorAll('img'));
+  var pending = imgs.filter(function (im) { return !im.complete; });
+  if (!pending.length) { cb(); return; }
+  var left = pending.length, done = false;
+  pending.forEach(function (im) {
+    var fin = function () { left--; if (left === 0 && !done) { done = true; cb(); } };
+    im.addEventListener('load', fin);
+    im.addEventListener('error', fin);
+  });
+  setTimeout(function () { if (!done) { done = true; cb(); } }, 2500);
+}
+
+function paginate(src, pagesBox) {
+  pagesBox.innerHTML = '';
+  var queue = Array.prototype.slice.call(src.children);
+  var pageStack = [], cur = null;
+  var LIMIT = PAGE_H_PX;
+
+  function newPage() {
+    var shell = buildPageShell();
+    pagesBox.appendChild(shell.page);
+    pageStack.push(shell);
+    cur = shell;
+    LIMIT = shell.body.clientHeight || PAGE_H_PX;
+  }
+  function bottomPos() {
+    if (!cur.body.lastElementChild) { return 0; }
+    var nb = cur.body.getBoundingClientRect();
+    var lb = cur.body.lastElementChild.getBoundingClientRect();
+    return lb.bottom - nb.top;
+  }
+  function fits() { return bottomPos() <= LIMIT - 6; } /* 留 6px(≈1.6mm) 安全余量，防亚像素累积误差造成裁切 */
+  function remain() { return LIMIT - bottomPos(); }
+
+  function textNodes(el) {
+    var out = [], w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null), n;
+    while ((n = w.nextNode())) { if (n.nodeValue.length) { out.push(n); } }
+    return out;
+  }
+  function locate(nodes, k) {
+    var acc = 0;
+    for (var i = 0; i < nodes.length; i++) {
+      var L = nodes[i].nodeValue.length;
+      if (acc + L >= k) { return { node: nodes[i], offset: k - acc }; }
+      acc += L;
+    }
+    return null;
+  }
+  function cutTailInPlace(el, k) {
+    var pos = locate(textNodes(el), k);
+    if (!pos || !el.lastChild) { return; }
+    var r = document.createRange();
+    r.setStart(pos.node, pos.offset);
+    r.setEndAfter(el.lastChild);
+    r.deleteContents();
+  }
+  function cutHeadInPlace(el, k) {
+    var pos = locate(textNodes(el), k);
+    if (!pos) { el.textContent = ''; return; }
+    if (!el.firstChild) { return; }
+    var r = document.createRange();
+    r.setStartBefore(el.firstChild);
+    r.setEnd(pos.node, pos.offset);
+    r.deleteContents();
+  }
+
+  function splitText(block) {
+    var bad = 'div,p,ul,ol,li,table,pre,blockquote,h1,h2,h3,h4,h5,h6,img,hr,figure';
+    if (block.querySelector && block.querySelector(bad)) { return false; }
+    var total = block.textContent.length;
+    if (total < 24) { return false; }
+    var parent = block.parentNode;
+    var lo = 1, hi = total - 1, best = 0;
+    while (lo <= hi) {
+      var mid = (lo + hi) >> 1;
+      var probe = block.cloneNode(true);
+      cutTailInPlace(probe, mid);
+      parent.insertBefore(probe, block);
+      parent.removeChild(block);
+      var ok = fits();
+      parent.insertBefore(block, probe);
+      parent.removeChild(probe);
+      if (ok) { best = mid; lo = mid + 1; } else { hi = mid - 1; }
+    }
+    if (best < 12) { return false; }
+    var rest = block.cloneNode(true);
+    cutTailInPlace(block, best);
+    cutHeadInPlace(rest, best);
+    if (block.tagName !== 'PRE') {
+      block.classList.add('cut-mid');
+      rest.classList.add('cut-cont');
+    }
+    queue.unshift(rest);
+    return true;
+  }
+
+  /* 把一个 LI 的内部内容（嵌套列表/子块）拆开：按装不下的位置把尾部挪出，
+     成功返回“续块”（仅含尾部内容的列表容器），失败返回 null */
+  function splitInnerOfLI(blockTag, blockClass, li) {
+    if (!li) { return null; }
+    var inner = null, ci;
+    for (ci = 0; ci < li.children.length; ci++) {
+      var cc = li.children[ci];
+      if ((cc.tagName === 'OL' || cc.tagName === 'UL') && cc.children.length >= 2) { inner = cc; break; }
+    }
+    var cont = document.createElement('li');
+    cont.className = 'split-cont';
+    var moved = false;
+    if (inner) {
+      var restInner = inner.cloneNode(false);
+      var items = Array.prototype.slice.call(inner.children);
+      while (items.length > 1 && !fits()) { restInner.insertBefore(items.pop(), restInner.firstChild); moved = true; }
+      if (!fits()) { restInner.insertBefore(items.pop(), restInner.firstChild); moved = true; }
+      if (!moved) { return null; }
+      if (!items.length) {
+        while (restInner.firstChild) { inner.appendChild(restInner.firstChild); }
+        return null;
+      }
+      if (inner.tagName === 'OL') {
+        var st = parseInt(inner.getAttribute('start') || '1', 10);
+        restInner.setAttribute('start', String(st + items.length));
+      }
+      cont.appendChild(restInner);
+    } else {
+      var blks = Array.prototype.slice.call(li.children).filter(function (c) {
+        return /^(P|UL|OL|PRE|BLOCKQUOTE|TABLE)$/.test(c.tagName);
+      });
+      if (blks.length < 2) { return null; }
+      while (blks.length > 1 && !fits()) { cont.insertBefore(blks.pop(), cont.firstChild); moved = true; }
+      if (!fits()) { cont.insertBefore(blks.pop(), cont.firstChild); moved = true; }
+      if (!moved) { return null; }
+      if (!blks.length) {
+        while (cont.firstChild) { li.appendChild(cont.firstChild); }
+        return null;
+      }
+    }
+    var restOuter = document.createElement(blockTag);
+    if (blockClass) { restOuter.className = blockClass; }
+    restOuter.appendChild(cont);
+    return restOuter;
+  }
+
+  function splitSingleLI(block, li) {
+    var restOuter = splitInnerOfLI(block.tagName, block.className, li);
+    if (!restOuter) { return false; }
+    queue.unshift(restOuter);
+    return true;
+  }
+
+  function splitBlock(block) {
+    var tag = block.tagName;
+    if (tag === 'UL' || tag === 'OL') {
+      var lis = Array.prototype.slice.call(block.children).filter(function (c) { return c.tagName === 'LI'; });
+      if (lis.length < 2) { return splitSingleLI(block, lis[0]); }
+      var restL = document.createElement(tag);
+      if (block.className) { restL.className = block.className; }
+      var movedNow = false;
+      while (lis.length > 1 && !fits()) { restL.insertBefore(lis.pop(), restL.firstChild); movedNow = true; }
+      if (fits()) {
+        if (movedNow) {
+          if (tag === 'OL') {
+            var st = parseInt(block.getAttribute('start') || '1', 10);
+            restL.setAttribute('start', String(st + lis.length));
+          }
+          queue.unshift(restL);
+        }
+        return true;
+      }
+      /* 只剩一条也装不下：改拆这条的内部（嵌套列表/子块），尾部与已弹出的条目一起排到下一页 */
+      var tailO = (lis.length === 1) ? splitInnerOfLI(tag, block.className, lis[0]) : null;
+      if (tailO) {
+        if (movedNow) {
+          if (tag === 'OL') {
+            var st2 = parseInt(block.getAttribute('start') || '1', 10);
+            restL.setAttribute('start', String(st2 + lis.length));
+          }
+          queue.unshift(restL);
+        }
+        queue.unshift(tailO);
+        return true;
+      }
+      if (movedNow) {
+        while (restL.firstChild) { block.appendChild(restL.firstChild); }
+      }
+      return false;
+    }
+    if (tag === 'TABLE') {
+      var tb = block.tBodies && block.tBodies[0];
+      if (!tb) { return false; }
+      var rows = Array.prototype.slice.call(tb.children).filter(function (r) { return r.tagName === 'TR'; });
+      if (rows.length < 2) { return false; }
+      var restT = document.createElement('table');
+      if (block.className) { restT.className = block.className; }
+      if (block.tHead) { restT.appendChild(block.tHead.cloneNode(true)); }
+      var ntb = document.createElement('tbody');
+      restT.appendChild(ntb);
+      var movedNowT = false;
+      while (rows.length > 1 && !fits()) { ntb.insertBefore(rows.pop(), ntb.firstChild); movedNowT = true; }
+      if (!fits()) { ntb.insertBefore(rows.pop(), ntb.firstChild); movedNowT = true; }
+      if (!movedNowT) { return false; }
+      if (!rows.length) {
+        while (ntb.firstChild) { tb.appendChild(ntb.firstChild); }
+        return false;
+      }
+      queue.unshift(restT);
+      return true;
+    }
+    if (tag === 'BLOCKQUOTE') {
+      var kids = Array.prototype.slice.call(block.children).filter(function (c) { return /^(P|UL|OL|PRE|BLOCKQUOTE)$/.test(c.tagName); });
+      if (kids.length < 2) { return false; }
+      var restQ = document.createElement('blockquote');
+      if (block.className) { restQ.className = block.className; }
+      var movedNowQ = false;
+      while (kids.length > 1 && !fits()) { restQ.insertBefore(kids.pop(), restQ.firstChild); movedNowQ = true; }
+      if (!fits()) { restQ.insertBefore(kids.pop(), restQ.firstChild); movedNowQ = true; }
+      if (!movedNowQ) { return false; }
+      if (!kids.length) {
+        while (restQ.firstChild) { block.appendChild(restQ.firstChild); }
+        return false;
+      }
+      queue.unshift(restQ);
+      return true;
+    }
+    if (tag === 'P' || tag === 'PRE') {
+      return splitText(block);
+    }
+    if (/^(NAV|DIV|SECTION|ARTICLE|ASIDE)$/.test(tag)) {
+      var childEls = Array.prototype.slice.call(block.children);
+      if (childEls.length >= 2) {
+        var restG = document.createElement(tag);
+        if (block.className) { restG.className = block.className; }
+        var movedG = false;
+        while (childEls.length > 1 && !fits()) { restG.insertBefore(childEls.pop(), restG.firstChild); movedG = true; }
+        if (!fits()) { restG.insertBefore(childEls.pop(), restG.firstChild); movedG = true; }
+        if (movedG) {
+          if (!childEls.length) {
+            while (restG.firstChild) { block.appendChild(restG.firstChild); }
+            return false;
+          }
+          queue.unshift(restG);
+          return true;
+        }
+      }
+      return false;
+    }
+    return false;
+  }
+
+  newPage();
+  var guard = 0;
+  while (queue.length) {
+    if (++guard > 50000) { break; }
+    var block = queue.shift();
+    cur.body.appendChild(block);
+    if (fits()) {
+      if (/^H[1-6]$/.test(block.tagName) && remain() < 68 && cur.body.children.length > 1 && queue.length) {
+        cur.body.removeChild(block);
+        newPage();
+        cur.body.appendChild(block);
+      }
+      continue;
+    }
+    if (splitBlock(block)) { continue; }
+    cur.body.removeChild(block);
+    newPage();
+    cur.body.appendChild(block);
+    if (!fits()) { splitBlock(block); }
+  }
+
+  var overflow = 0;
+  pageStack.forEach(function (sh) {
+    var rb = sh.body.getBoundingClientRect();
+    var lim = rb.height + 1;
+    var kids = sh.body.children;
+    for (var j = 0; j < kids.length; j++) {
+      if (kids[j].getBoundingClientRect().bottom - rb.top > lim) { overflow++; break; }
+    }
+  });
+  return { pages: pageStack, overflow: overflow };
+}
+
+function setPageTitle(title) {
+  var t = (title || '').replace(/[\r\n\t]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
+  if (!t) {
+    var h1 = doc.querySelector('h1');
+    if (h1) { t = h1.textContent.replace(/\s{2,}/g, ' ').trim(); }
+  }
+  var u = 0, cutAt = -1;
+  for (var i = 0; i < t.length; i++) { u += (t.charCodeAt(i) > 0x2E80 ? 2 : 1); if (u > 88) { cutAt = i; break; } }
+  if (cutAt >= 0) { t = t.slice(0, cutAt) + '\u2026'; }
+  pageTitle = t;
+}
+
+function render(text, name, opts) {
+  text = text.replace(/^\uFEFF/, '');
+  text = stripFrontMatter(text);
+  text = stripStrikeMarks(text);
+  text = normalizeTildesText(text);
+  var html = marked.parse(text, { gfm: true, breaks: false });
+  doc.innerHTML = sanitize(html);
+  var fixed = fixStrays(doc);
+  normalizeQuotes(doc);
+  normalizeTildes(doc);
+  /* 2026-09-14 反馈：给"怎么考/是什么"类词加彩色块显多余，已停用；如需恢复取消下一行注释 */
+  // decorateTags(doc);
+  /* 2026-09-14 反馈：年份引用加黄色标记显多余，已停用；如需恢复取消下一行注释 */
+  // decorateYears(doc);
+  decorateAnswers(doc);
+  decorateWarnWords(doc);
+  decorateSymbols(doc);
+  buildTOC(doc);
+  markHeadings(doc);
+  fitWideTables(doc);   /* 多列表格分级降字号（分页前执行） */
+  baseName = (name || 'document').replace(/\.(md|markdown|mdown|txt)$/i, '');
+  var h1t = doc.querySelector('h1');
+  setPageTitle((h1t && isDocTitleH1(h1t, doc)) ? h1t.textContent : baseName);
+  document.title = baseName;
+  fname.textContent = name || '';
+  waitImages(function () { startPagination(opts || {}, fixed); });
+}
+
+function startPagination(flags, fixed) {
+  var pagesBox = document.getElementById('pages');
+  var busy = document.getElementById('busy');
+  wrap.style.display = 'block';
+  pagesBox.style.display = 'block';
+  if (busy) { busy.style.display = 'flex'; }
+  setTimeout(function () {
+    var res = paginate(doc, pagesBox);
+    res.pages.forEach(function (sh, i) {
+      sh.footer.textContent = '\u00b7 第 ' + (i + 1) + ' 页 / 共 ' + res.pages.length + ' 页 \u00b7';
+    });
+    var map = {};
+    res.pages.forEach(function (sh, i) {
+      Array.prototype.forEach.call(sh.body.querySelectorAll('h1[id], h2[id]'), function (h) { map[h.id] = i + 1; });
+    });
+    Array.prototype.forEach.call(pagesBox.querySelectorAll('.toc-entry'), function (a) {
+      var href = a.getAttribute('href') || '';
+      if (href.charAt(0) !== '#') { return; }
+      var pg = map[href.slice(1)];
+      var n = a.querySelector('.toc-num');
+      if (n && pg) { n.textContent = pg; }
+    });
+    if (busy) { busy.style.display = 'none'; }
+    doc.style.display = 'none';
+    picker.style.display = 'none';
+    bar.style.display = 'flex';
+    window.scrollTo(0, 0);
+    collectIssues(flags, fixed, res.overflow);
+  }, 40);
+}
+
+function readFile(f) {
+  if (!f) { return; }
+  var reader = new FileReader();
+  reader.onload = function () {
+    var buf = reader.result;
+    var text = new TextDecoder('utf-8').decode(buf);
+    var bad = (text.match(/\uFFFD/g) || []).length;
+    var reencoded = false;
+    if (bad > 2) {
+      try { text = new TextDecoder('gb18030').decode(buf); reencoded = true; } catch (e) { }
+    }
+    render(text, f.name, { reencoded: reencoded });
+  };
+  reader.readAsArrayBuffer(f);
+}
+
+document.getElementById('btnPick').addEventListener('click', function () { fileInput.click(); });
+fileInput.addEventListener('change', function () { if (fileInput.files.length) { readFile(fileInput.files[0]); } });
+
+var drop = document.getElementById('drop');
+['dragenter', 'dragover'].forEach(function (ev) {
+  window.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.add('hover'); });
+});
+['dragleave', 'drop'].forEach(function (ev) {
+  window.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.remove('hover'); });
+});
+window.addEventListener('drop', function (e) {
+  if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) { readFile(e.dataTransfer.files[0]); }
+});
+
+document.getElementById('btnPdf').addEventListener('click', function () { window.print(); });
+document.getElementById('btnNew').addEventListener('click', function () {
+  doc.innerHTML = '';
+  doc.style.display = '';
+  var pb = document.getElementById('pages');
+  pb.innerHTML = '';
+  pb.style.display = 'none';
+  var chk = document.getElementById('chk');
+  if (chk) { chk.style.display = 'none'; }
+  fileInput.value = '';
+  wrap.style.display = 'none';
+  bar.style.display = 'none';
+  picker.style.display = 'block';
+  document.title = 'Markdown 阅读 & 出 PDF';
+  window.scrollTo(0, 0);
+});
+</script>
+</body>
+</html>

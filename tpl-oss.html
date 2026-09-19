@@ -287,7 +287,7 @@ button { font-family: inherit; }
     <p class="or">也可以把文件直接从文件夹拖到这块区域</p>
   </div>
   <p class="note"><b class="must">导出前必做：在打印窗口展开「更多设置」，勾选「背景图形」。</b>不勾选的话，表格边框、标题底纹、答案标记的底色会全部消失，版式会垮掉。<br>文件只在本机读取，不会上传到网上。点右上角「导出 PDF」，在窗口里把「目标」选成「另存为 PDF」即可保存。<br>喷墨彩印建议：纸张选 80g 以上（普通 70g 会起皱），打印质量选「高质量 / 最佳」而非「标准」。<br>
-    <span style="color:#9aa5b1">v1.0 · A4 · 仿宋 12pt · 版心 170mm · 左 25mm 装订边</span></p>
+    <span style="color:#9aa5b1">v1.1 · A4 · 仿宋 12pt · 版心 170mm · 左 25mm 装订边</span></p>
   <input id="file" type="file" accept=".md,.markdown,.mdown,.txt,text/markdown" hidden>
 </section>
 
@@ -321,7 +321,7 @@ var wrap = document.getElementById('wrap');
 var fname = document.getElementById('fname');
 var fileInput = document.getElementById('file');
 var baseName = 'document';
-/* 开源版默认不带徽章。想加自己的校徽/徽章：用 tools\build.py 注入，
+/* 开源版默认不带徽章。想加自己的校徽/徽章：用 tools/build.py 注入，
    或直接把下面两行的空字符串换成 data:image/png;base64,<你的PNG> */
 var CREST_SRC = '';
 var CREST2_SRC = '';
@@ -394,6 +394,24 @@ function decorateAnswers(root) {
   });
 }
 
+/* 判断文档是否自带导航结构（总览表/目录/清单 + 表格或长列表） */
+function hasSelfNav(root) {
+  var metaRe = /^\s*(总\s*览\s*表?|概\s*览|内\s*容\s*提\s*要|目\s*录|导\s*航|片\s*单|清\s*单|索\s*引|contents?|overview|index|table of contents)\s*[：:]?\s*$/i;
+  var scan = Math.min(root.children.length, 15);
+  for (var i = 0; i < scan; i++) {
+    var el = root.children[i];
+    if (!el.tagName || !/^H[1-6]$/.test(el.tagName)) { continue; }
+    if (!metaRe.test(el.textContent || '')) { continue; }
+    var s = el.nextElementSibling, k = 0;
+    while (s && k++ < 3) {
+      if (s.tagName === 'TABLE') { return true; }
+      if (/^(UL|OL)$/.test(s.tagName) && s.children.length >= 5) { return true; }
+      s = s.nextElementSibling;
+    }
+  }
+  return false;
+}
+
 function buildTOC(root) {
   var h1s = [], h2s = [];
   for (var i = 0; i < root.children.length; i++) {
@@ -402,11 +420,17 @@ function buildTOC(root) {
     else if (tn === 'H2') { h2s.push(root.children[i]); }
   }
   var numRe = /^\s*(?:[\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341\u767e]+\s*[\u3001.\uFF0E]|\u7b2c\s*[\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341\u767e\d]+\s*[\u7ae0\u8bb2\u8282\u90e8]|[\uFF08(]\s*[\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341\d]+\s*[\uFF09)]|\d+\s*[.\u3001\uFF0E])/;
-  var handToc = null;
-  var scanLimit = Math.min(root.children.length, 20);
-  for (var ci = 0; ci < scanLimit; ci++) {
+  /* 收集**全部**手写目录锚点（修复：原实现只取第一个且只扫前 20 个元素）。
+     两种形态都认：① 标题标签 h1-h6；② 加粗段落 <p><strong>目录</strong></p> */
+  var handTocs = [];
+  for (var ci = 0; ci < root.children.length; ci++) {
     var cel = root.children[ci];
-    if (/^H[1-6]$/.test(cel.tagName) && /^\s*(目\s*录|contents?)\s*$/i.test(cel.textContent)) { handToc = cel; break; }
+    if (!cel.tagName) { continue; }
+    var isHeading = /^H[1-6]$/.test(cel.tagName);
+    var isBoldP = cel.tagName === 'P' && cel.children.length === 1 &&
+                  /^(STRONG|B)$/.test(cel.children[0].tagName);
+    if (!isHeading && !isBoldP) { continue; }
+    if (/^\s*(目\s*录|目\s*錄|contents?)\s*$/i.test(cel.textContent || '')) { handTocs.push(cel); }
   }
   var list = null, skipFirst = false, anchor = null;
   if (h1s.length >= 3) {
@@ -420,6 +444,10 @@ function buildTOC(root) {
   }
   if (!list) { return; }
   if (list.length - (skipFirst ? 1 : 0) < 2) { return; }
+
+  /* 文档自带导航结构时跳过自动目录生成，避免"双目录"。
+     真实案例：IMDb 片单文档自带「## 总览表」+ 99 行表格，工具再生成 100 条目录 = 两份导航重复。 */
+  if (hasSelfNav(root) && list.length >= 30) { return; }
   var nav = document.createElement('nav');
   nav.className = 'toc';
   var hd = document.createElement('div');
@@ -445,12 +473,29 @@ function buildTOC(root) {
     a.appendChild(num);
     nav.appendChild(a);
   }
-  if (handToc) {
-    var hideList = [handToc];
-    var sib = handToc.nextElementSibling;
-    while (sib && /^(OL|UL)$/.test(sib.tagName)) { hideList.push(sib); sib = sib.nextElementSibling; }
-    hideList.forEach(function (h) { h.classList.add('hand-toc'); });
-    handToc.parentNode.insertBefore(nav, handToc);
+  if (handTocs.length) {
+    handTocs.forEach(function (ht) {
+      var hideList = [ht];
+      var sib = ht.nextElementSibling;
+      var guard = 0;
+      while (sib && guard++ < 80) {
+        var tn = sib.tagName;
+        if (/^H[1-6]$/.test(tn)) { break; }               /* 遇到任何标题即认为目录块结束 */
+        if (/^(UL|OL)$/.test(tn)) { hideList.push(sib); sib = sib.nextElementSibling; continue; }
+        if (tn === 'P') {                                  /* 「目录 + 普通段落」形态 */
+          var t = (sib.textContent || '').trim();
+          /* 只认「目录条目特征」，不认「短行」——正文里也有短段落，
+             误伤正文的代价远大于漏隐藏目录（保守优先）。 */
+          /* 注意：中文省略号「……」是两个 U+2026 字符，量词须用 {2,} */
+          var looksLikeEntry = /[.…·]{2,}\s*\d+\s*$/.test(t)      /* 点线 + 页码，如「三、章节 …… 7」 */
+                            || /^(\d+|[一二三四五六七八九十]+)\s*[.、．]/.test(t); /* 以序号开头 */
+          if (looksLikeEntry) { hideList.push(sib); sib = sib.nextElementSibling; continue; }
+        }
+        break;                                             /* 不符合目录特征，停止 */
+      }
+      hideList.forEach(function (h) { h.classList.add('hand-toc'); });
+    });
+    handTocs[0].parentNode.insertBefore(nav, handTocs[0]);
   } else if (anchor) {
     anchor.parentNode.insertBefore(nav, anchor.nextSibling);
   } else {
